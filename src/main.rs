@@ -16,28 +16,30 @@ use serde::{Deserialize, Serialize};
 #[derive(Args, Debug)]
 #[group(required = true, multiple = false)]
 struct Files {
+    /// Update checksum for specified vendored files
     #[arg(long, alias = "files", short, num_args(1..),  value_name = "FILES")]
     files_in_vendor_dir: Vec<PathBuf>,
-
+    /// Run batch process for specified vendored packages
     #[arg(long, short, num_args(1..))]
     packages: Vec<OsString>,
-
+    /// Run batch process for all vendor packages
     #[arg(long, short)]
     all: bool,
-
     #[arg(long, required(false), value_name = "SHELL")]
     completion: Option<Shell>,
 }
 
+/// It is a tool to update checksums of modified files in vendor directory. NOTE! Batch process
+/// will remove references of missing files from '.cargo-checksum.json'
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None, infer_long_args(true))]
 struct Cli {
     #[command(flatten)]
     files: Files,
-
+    /// Specify the path of vendor folder, when running not from repository directory
     #[arg(long, default_value = "vendor", value_name = "DIR")]
     vendor: PathBuf,
-
+    /// Limit the number of threads or this number will be set automatically
     #[arg(long, value_name("NUM"))]
     num_threads: Option<usize>,
 }
@@ -144,13 +146,18 @@ fn process_packages<V: AsRef<Path>>(vendor: V, packages: &[OsString]) -> Result<
             .into_keys()
             .collect::<Vec<_>>()
             .par_iter()
-            .map(|relative_file| -> Result<_> {
+            .filter_map(|relative_file| -> Option<Result<_>> {
                 let file = path.join(relative_file);
-                let digest = sha256::try_digest(&file)?;
-                Ok((relative_file.to_owned(), digest))
+                match sha256::try_digest(&file) {
+                    Ok(digest) => Some(Ok((relative_file.to_owned(), digest))),
+                    Err(_) => {
+                        println!("sha256::try_digest failed. NOTE: .cargo-checksum.json will be updated without file:\n{file:?}\n");
+                        None
+                    }
+                }
             })
             .collect::<Vec<_>>();
-
+        checksum.files.clear();
         for result in results {
             let (file, digest) = result?;
             checksum.files.insert(file.to_owned(), digest);
